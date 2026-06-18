@@ -93,18 +93,18 @@ function renderScan(rows) {
     const ind = r.indicators, fs = r.factor_scores;
     const starOn = watchSet.has(r.ticker) ? "on" : "";
     return `<tr data-tk="${r.ticker}">
-      <td>${i + 1}</td>
-      <td class="dcell">${rankDelta(r)}</td>
-      <td><span class="tk">${r.ticker}<small>${r.name || ""}</small></span></td>
-      <td class="score">${fmt(r.score, 0)}</td>
-      <td><span class="badge ${r.signal.badge}">${r.signal.badge}</span></td>
-      <td>${fmt(ind.rsi, 0)}</td>
-      <td>${bar(fs.trend)}</td>
-      <td>${bar(fs.momentum)}</td>
-      <td>${bar(fs.breakout)}</td>
-      <td>${bar(fs.volume)}</td>
-      <td>${bar(fs.rel_strength)}</td>
-      <td><button class="star ${starOn}" data-star="${r.ticker}">★</button></td>
+      <td data-label="Rank">${i + 1}</td>
+      <td class="dcell" data-label="1d">${rankDelta(r)}</td>
+      <td data-label="Ticker"><span class="tk">${r.ticker}<small>${r.name || ""}</small></span></td>
+      <td class="score" data-label="Score">${fmt(r.score, 0)}</td>
+      <td data-label="Signal"><span class="badge ${r.signal.badge}">${r.signal.badge}</span></td>
+      <td data-label="RSI">${fmt(ind.rsi, 0)}</td>
+      <td data-label="Trend">${bar(fs.trend)}</td>
+      <td data-label="Momentum">${bar(fs.momentum)}</td>
+      <td data-label="Breakout">${bar(fs.breakout)}</td>
+      <td data-label="Vol">${bar(fs.volume)}</td>
+      <td data-label="RS">${bar(fs.rel_strength)}</td>
+      <td class="starcell"><button class="star ${starOn}" data-star="${r.ticker}">★</button></td>
     </tr>`;
   }).join("");
   $$("#scanTable tbody tr").forEach(tr => tr.onclick = (e) => {
@@ -208,14 +208,24 @@ function drawEmaChart(canvas, chart) {
   const state = {ctx, chart, series, geom};
 
   renderChart(state, null);
-  canvas.onmousemove = (e) => {
+  // map a clientX to a session index (null when outside the plot area)
+  const idxAt = (clientX) => {
     const r = canvas.getBoundingClientRect();
-    const mx = e.clientX - r.left;
-    if (mx < padL - 4 || mx > padL + W + 4) { renderChart(state, null); return; }
-    let i = Math.round(((mx - padL) / W) * (n - 1));
-    renderChart(state, Math.max(0, Math.min(n - 1, i)));
+    const mx = clientX - r.left;
+    if (mx < padL - 4 || mx > padL + W + 4) return null;
+    const i = Math.round(((mx - padL) / W) * (n - 1));
+    return Math.max(0, Math.min(n - 1, i));
   };
+  canvas.onmousemove = (e) => renderChart(state, idxAt(e.clientX));
   canvas.onmouseleave = () => renderChart(state, null);
+  const onTouch = (e) => {
+    if (!e.touches.length) return;
+    e.preventDefault();                       // hold the crosshair, don't scroll
+    renderChart(state, idxAt(e.touches[0].clientX));
+  };
+  canvas.ontouchstart = onTouch;
+  canvas.ontouchmove = onTouch;
+  canvas.ontouchend = () => renderChart(state, null);
 }
 
 function renderChart(state, hoverIdx) {
