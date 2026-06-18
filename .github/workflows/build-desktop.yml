@@ -1,0 +1,76 @@
+name: Build desktop installers
+
+# Builds Windows, macOS and Linux installers on native runners, since
+# PyInstaller cannot cross-compile. Triggers on a version tag (v1.2.3) or
+# manually from the Actions tab. Artifacts are uploaded to the run, and to a
+# GitHub Release when triggered by a tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: SwingFinder-linux
+          - os: macos-latest
+            artifact: SwingFinder-macos
+          - os: windows-latest
+            artifact: SwingFinder-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r packaging/requirements-build.txt
+
+      - name: Build (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: bash packaging/build_linux.sh
+
+      - name: Build (macOS)
+        if: matrix.os == 'macos-latest'
+        run: bash packaging/build_macos.sh
+
+      - name: Install Inno Setup (Windows)
+        if: matrix.os == 'windows-latest'
+        run: choco install innosetup --no-progress -y
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        run: powershell -ExecutionPolicy Bypass -File packaging/build_windows.ps1
+
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p out
+          # Copy the shareable artifacts (ignore intermediate build files).
+          cp dist/*.tar.gz out/ 2>/dev/null || true
+          cp dist/*.dmg    out/ 2>/dev/null || true
+          cp dist/SwingFinder-Setup-*.exe out/ 2>/dev/null || true
+          # Fallback so the job always has something to upload.
+          if [ -z "$(ls -A out)" ]; then
+            cp dist/SwingFinder* out/ 2>/dev/null || true
+          fi
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: out/*
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*

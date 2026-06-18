@@ -1,0 +1,29 @@
+# Render Blueprint for Swing Finder.
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo. Local use is
+# unaffected (bash run.sh still launches the Flask dev server on :5057).
+services:
+  - type: web
+    name: swing-finder
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    # 1 worker (scans are CPU-bound + SQLite is single-writer); threads let a long
+    # /api/refresh run without fully blocking other requests; long timeout because
+    # warming the full universe from Yahoo can take minutes.
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+
+    # NOTE: the free tier has an EPHEMERAL filesystem — the price cache and the
+    # watchlist reset on every deploy/restart (the app auto re-seeds from
+    # seed_snapshot.csv, so it's never empty). To persist them, switch to a paid
+    # instance and uncomment the disk + STOCKPICKER_DB env var below:
+    #
+    # disk:
+    #   name: data
+    #   mountPath: /var/data
+    #   sizeGB: 1
+    # (add under envVars:)  - key: STOCKPICKER_DB
+    #                         value: /var/data/stockpicker.db

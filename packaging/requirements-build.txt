@@ -1,0 +1,3 @@
+# Build-time tooling for producing the desktop installers.
+# Install alongside the app's runtime requirements before packaging.
+pyinstaller>=6.6

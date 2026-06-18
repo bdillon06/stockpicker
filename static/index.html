@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swing Finder — short-term setups</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">📈 <strong>Swing Finder</strong> <span class="sub">short-term technical setups</span></div>
+  <form class="lookup" id="lookupForm" autocomplete="off">
+    <input id="lookupInput" placeholder="Look up any ticker… e.g. TSLA" maxlength="8">
+    <button type="submit">View</button>
+  </form>
+  <div class="status" id="status">loading…</div>
+  <button id="refreshBtn" title="Fetch fresh prices from Yahoo (slow)">↻ Refresh data</button>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="scan">Scan</button>
+  <button class="tab" data-tab="watch">Watchlist</button>
+</nav>
+
+<main>
+  <!-- SCAN -->
+  <section id="scan" class="view active">
+    <div class="controls">
+      <div class="weights" id="weights"></div>
+      <div class="scan-actions">
+        <label class="chk"><input type="checkbox" id="enrichChk" checked> include catalysts (slower)</label>
+        <label>Show top <input type="number" id="topN" value="40" min="5" max="200" style="width:4em"></label>
+        <button id="scanBtn" class="primary">Find swing setups</button>
+      </div>
+    </div>
+    <div id="scanMsg" class="msg"></div>
+    <table class="grid" id="scanTable">
+      <thead><tr>
+        <th>#</th><th>Δ 1d</th><th>Ticker</th><th>Score</th><th>Signal</th>
+        <th>RSI</th><th>Trend</th><th>Momentum</th><th>Breakout</th><th>Vol</th><th>RS</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <!-- WATCHLIST -->
+  <section id="watch" class="view">
+    <div id="watchList" class="cards"></div>
+    <p class="msg" id="watchMsg"></p>
+  </section>
+</main>
+
+<!-- DETAIL DRAWER -->
+<div id="drawer" class="drawer hidden">
+  <div class="drawer-inner">
+    <button class="close" id="drawerClose">✕</button>
+    <div id="drawerBody"></div>
+  </div>
+</div>
+
+<footer>
+  ⚠️ Educational research tool using public data — <strong>not financial advice</strong>.
+  Short-term trading is high-risk; scores rank technical setups, not guaranteed gains.
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
