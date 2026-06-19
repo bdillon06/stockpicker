@@ -66,12 +66,15 @@ def is_fresh(fetched_at: float, ttl_seconds: float) -> bool:
 
 
 # --- price cache -----------------------------------------------------------
-def save_prices(ticker: str, ohlcv: dict) -> None:
+def save_prices(ticker: str, ohlcv: dict, fetched_at: float | None = None) -> None:
+    """Cache OHLCV for ``ticker``. ``fetched_at`` defaults to now; seeding passes
+    an old timestamp so the bundled snapshot is always superseded by a live fetch."""
     with connect() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO price_cache(ticker, ohlcv_json, fetched_at)"
             " VALUES (?,?,?)",
-            (ticker, json.dumps(ohlcv), time.time()),
+            (ticker, json.dumps(ohlcv),
+             time.time() if fetched_at is None else fetched_at),
         )
 
 

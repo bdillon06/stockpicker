@@ -288,6 +288,8 @@ def seed_from_snapshot() -> int:
                 by_ticker[t][k].append(float(row[k]))
     for t, o in by_ticker.items():
         if len(o["close"]) >= 60:  # enough for the indicators to compute
-            db.save_prices(t, o)
+            # Stamp the seed as stale (fetched_at=0) so the first live refresh
+            # always supersedes it rather than being skipped as "fresh".
+            db.save_prices(t, o, fetched_at=0.0)
             seeded += 1
     return seeded

@@ -177,6 +177,14 @@ def scan():
 @app.route("/api/stock/<ticker>")
 def stock_detail(ticker):
     ticker = ticker.upper()
+    # Pull fresh bars for this ticker (and the benchmark) on demand when the
+    # cache is stale, so the detail view and chart aren't stuck on the bundled
+    # seed snapshot. bulk_history/get_benchmark skip the network when fresh.
+    try:
+        data.get_benchmark()
+        data.bulk_history([ticker])
+    except Exception:
+        pass
     ranked, by_ticker, bench = _ranked_universe()
 
     if ticker in by_ticker:
