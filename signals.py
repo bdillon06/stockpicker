@@ -98,20 +98,18 @@ def evaluate(ind: dict, score: float | None = None) -> dict:
         reasons.append(f"Volume surge {ind['volume_surge']:.1f}x average")
         bullish += 1
 
-    # Decide badge: combine technical tally with score if available.
-    if score is not None:
-        if score >= 70 and bullish > bearish:
-            badge = "BUY"
-        elif score >= 45 and bullish >= bearish:
-            badge = "WATCH"
-        else:
-            badge = "AVOID"
+    # Decide badge. The absolute technical picture leads; the composite score
+    # only confirms. Score is a *percentile* against the scanned universe, so on
+    # a weak tape the best-ranked name still scores ~100 — gating on score alone
+    # promoted "least bad" stocks to BUY. A setup must stand on its own chart.
+    stack_ok = (not any(_nan(x) for x in (price, e13, e90, e200))
+                and price > e200 and e13 > e90)
+    if bearish == 0 and bullish >= 4 and stack_ok and (
+            score is None or score >= 60):
+        badge = "BUY"
+    elif stack_ok and bullish > bearish and (score is None or score >= 40):
+        badge = "WATCH"
     else:
-        if bullish >= 4 and bearish == 0:
-            badge = "BUY"
-        elif bullish > bearish:
-            badge = "WATCH"
-        else:
-            badge = "AVOID"
+        badge = "AVOID"
 
     return {"badge": badge, "reasons": reasons, "levels": levels(ind)}

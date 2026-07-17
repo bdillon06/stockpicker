@@ -23,6 +23,24 @@ def uptrend_record(ticker="UP"):
             "indicators": ind.compute_all(ohlcv(close, vol), bench_close=bench)}
 
 
+def pullback_record(ticker="PB"):
+    """A realistic swing entry: established uptrend, mild pullback, resumption.
+
+    Deliberately not a straight ramp — a perfect line pins RSI at 100, which is
+    a chase, not a setup. Here RSI lands mid-band with the 13/90/200 stack
+    intact, which is the condition the scanner is meant to reward.
+    """
+    rng = np.random.default_rng(7)
+    base = np.linspace(80, 128, 235) + rng.normal(0, 0.7, 235)
+    pull = np.linspace(128, 121, 10)     # orderly dip toward the 13-EMA
+    resume = np.linspace(121, 129, 8)    # buyers step back in
+    close = np.concatenate([base, pull, resume])
+    vol = np.concatenate([np.full(len(close) - 1, 1_000_000.0), [2_400_000.0]])
+    bench = np.linspace(100, 105, len(close))
+    return {"ticker": ticker,
+            "indicators": ind.compute_all(ohlcv(close, vol), bench_close=bench)}
+
+
 def downtrend_record(ticker="DN"):
     close = np.linspace(140, 90, 250)
     bench = np.linspace(100, 105, len(close))
@@ -52,15 +70,28 @@ def test_scores_in_range():
         assert set(r["factor_scores"]) == set(scoring.FACTORS)
 
 
-def test_uptrend_signal_is_buy_with_valid_levels():
-    rec = uptrend_record()
+def test_pullback_setup_signals_buy_with_valid_levels():
+    rec = pullback_record()
     ranked = scoring.rank_universe([rec, downtrend_record(), flat_record()])
     top = ranked[0]
+    assert top["ticker"] == "PB"
     sig = signals.evaluate(top["indicators"], top["score"])
     assert sig["badge"] == "BUY"
     lv = sig["levels"]
     assert lv["stop"] < lv["entry"] < lv["target"]
     assert lv["risk_reward"] > 0
+
+
+def test_parabolic_uptrend_is_not_a_buy():
+    """A vertical ramp (RSI ~100) must not be badged BUY however well it ranks.
+
+    Guards the regression this scanner had: score is a percentile, so the best
+    name in a universe scores ~100 and used to earn BUY on that alone.
+    """
+    rec = uptrend_record()
+    sig = signals.evaluate(rec["indicators"], 100.0)
+    assert sig["badge"] != "BUY"
+    assert any("overbought" in r for r in sig["reasons"])
 
 
 def test_downtrend_signal_avoids():
@@ -89,3 +120,46 @@ def test_catalyst_score_clamped():
                                           "put_call_ratio": 0.3,
                                           "recent_news_count": 10})
     assert s <= 100.0
+
+
+# --- EMA / liquidity gate --------------------------------------------------
+def test_downtrend_fails_ema_gate():
+    """A stock under its 200-EMA must never reach the results, however it ranks."""
+    fails = scoring.check_filters(downtrend_record()["indicators"])
+    assert fails
+    assert any("200-EMA" in f for f in fails)
+
+
+def test_pullback_passes_ema_gate():
+    assert scoring.passes_filters(pullback_record()["indicators"])
+
+
+def test_illiquid_name_is_filtered_out():
+    rec = pullback_record()
+    rec["indicators"]["dollar_volume"] = 50_000.0  # ~$50k/day: untradable
+    fails = scoring.check_filters(rec["indicators"])
+    assert any("liquidity" in f for f in fails)
+
+
+def test_overextended_name_is_filtered_out():
+    rec = pullback_record()
+    rec["indicators"]["ext_atr_from_ema13"] = 9.0  # 9 ATR above the 13-EMA
+    fails = scoring.check_filters(rec["indicators"])
+    assert any("overextended" in f for f in fails)
+
+
+def test_filters_are_overridable():
+    ind_d = pullback_record()["indicators"]
+    # Demanding a rising 200-EMA and a full stack is stricter, never looser.
+    strict = scoring.check_filters(ind_d, {"require_full_stack": True,
+                                           "require_slow_rising": True})
+    assert len(strict) >= len(scoring.check_filters(ind_d))
+    # A malformed override falls back to the default rather than nuking results.
+    assert scoring.filter_params({"min_price": "abc"})["min_price"] == \
+        scoring.DEFAULT_FILTERS["min_price"]
+
+
+def test_missing_history_fails_rather_than_passes():
+    """An unverifiable rule must fail closed, not wave the stock through."""
+    fails = scoring.check_filters({"price": 50.0})  # no EMAs at all
+    assert any("insufficient history" in f for f in fails)

@@ -22,6 +22,34 @@ DEFAULT_WEIGHTS = {
 
 FACTORS = list(DEFAULT_WEIGHTS.keys())
 
+# --- The 13/90/200 EMA parameters -----------------------------------------
+# These define what actually qualifies as a setup, as opposed to merely ranking
+# well against a weak universe. Percentile ranking always produces a "top 30",
+# so without an absolute gate like this a scan happily returns names its own
+# signal logic then badges AVOID. Every key is overridable per scan.
+#
+#   require_above_slow  price must be above the 200-EMA (bull regime)
+#   require_fast_above_mid   EMA13 > EMA90 (short-term trend up)
+#   require_full_stack  price > EMA13 > EMA90 > EMA200 (textbook alignment)
+#   require_slow_rising 200-EMA slope > 0 (the base is improving, not bleeding)
+#   max_ext_from_fast   cap on how far price has run above EMA13, as a multiple
+#                       of ATR — filters names too extended to enter safely
+#   min_price / min_dollar_volume  liquidity floor; a setup you cannot fill or
+#                       exit is not a pick
+DEFAULT_FILTERS = {
+    "require_above_slow": True,
+    "require_fast_above_mid": True,
+    "require_full_stack": False,
+    "require_slow_rising": False,
+    "max_ext_from_fast": 4.0,
+    "min_price": 5.0,
+    "min_dollar_volume": 5_000_000.0,
+}
+
+_BOOL_FILTERS = ("require_above_slow", "require_fast_above_mid",
+                 "require_full_stack", "require_slow_rising")
+_NUM_FILTERS = ("max_ext_from_fast", "min_price", "min_dollar_volume")
+
 
 def _nan(x) -> bool:
     return x is None or (isinstance(x, float) and math.isnan(x))
@@ -29,6 +57,80 @@ def _nan(x) -> bool:
 
 def _clamp(x, lo=0.0, hi=1.0):
     return max(lo, min(hi, x))
+
+
+def filter_params(overrides: dict | None = None) -> dict:
+    """Merge user-supplied EMA/liquidity filters over the defaults.
+
+    Unknown keys are ignored and unparseable numbers fall back to the default,
+    so a malformed request degrades to the standard gate rather than silently
+    excluding the entire universe.
+    """
+    f = dict(DEFAULT_FILTERS)
+    src = overrides or {}
+    for k in _BOOL_FILTERS:
+        if k in src and src[k] is not None:
+            f[k] = bool(src[k])
+    for k in _NUM_FILTERS:
+        if src.get(k) is not None:
+            try:
+                f[k] = float(src[k])
+            except (TypeError, ValueError):
+                pass
+    return f
+
+
+def check_filters(ind: dict, filters: dict | None = None) -> list:
+    """Return the list of reasons ``ind`` fails the gate — empty means it passes.
+
+    Missing indicators (too little history) never silently pass a requirement:
+    a rule that cannot be evaluated is treated as failed, since an unverifiable
+    setup is not a setup.
+    """
+    f = filter_params(filters)
+    fails = []
+    price = ind.get("price")
+    e13, e90, e200 = ind.get("ema13"), ind.get("ema90"), ind.get("ema200")
+
+    if f["require_above_slow"]:
+        if _nan(price) or _nan(e200):
+            fails.append("no 200-EMA yet (insufficient history)")
+        elif price <= e200:
+            fails.append("price below 200-EMA")
+    if f["require_fast_above_mid"]:
+        if _nan(e13) or _nan(e90):
+            fails.append("no 13/90-EMA yet (insufficient history)")
+        elif e13 <= e90:
+            fails.append("EMA13 below EMA90")
+    if f["require_full_stack"]:
+        if any(_nan(x) for x in (price, e13, e90, e200)):
+            fails.append("EMA stack incomplete")
+        elif not (price > e13 > e90 > e200):
+            fails.append("not a full 13>90>200 stack")
+    if f["require_slow_rising"]:
+        s = ind.get("ema200_slope")
+        if _nan(s):
+            fails.append("no 200-EMA slope yet")
+        elif s <= 0:
+            fails.append("200-EMA falling")
+
+    # Extension: price far above EMA13 means the entry is chasing.
+    cap = f["max_ext_from_fast"]
+    ext = ind.get("ext_atr_from_ema13")
+    if cap and cap > 0 and not _nan(ext) and ext > cap:
+        fails.append(f"overextended >{cap:g} ATR above EMA13")
+
+    if f["min_price"] and not _nan(price) and price < f["min_price"]:
+        fails.append(f"price under ${f['min_price']:g}")
+    if f["min_dollar_volume"]:
+        dv = ind.get("dollar_volume")
+        if not _nan(dv) and dv < f["min_dollar_volume"]:
+            fails.append(f"thin liquidity (<${f['min_dollar_volume']/1e6:g}M/day)")
+    return fails
+
+
+def passes_filters(ind: dict, filters: dict | None = None) -> bool:
+    return not check_filters(ind, filters)
 
 
 def raw_factors(ind: dict) -> dict:

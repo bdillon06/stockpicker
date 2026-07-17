@@ -89,6 +89,20 @@ def get_prices(ticker: str):
     return json.loads(row["ohlcv_json"]), row["fetched_at"]
 
 
+def price_cache_signature() -> tuple:
+    """A cheap fingerprint of the price cache: (row count, newest fetch).
+
+    Lets callers reuse computed indicators while the underlying bars are
+    unchanged, without paying to load and parse every OHLCV blob to find out.
+    Any save_prices call moves one of the two components.
+    """
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(MAX(fetched_at), 0) AS mx"
+            " FROM price_cache").fetchone()
+    return (row["n"], row["mx"])
+
+
 def all_cached_prices() -> dict:
     """Return {ticker: (ohlcv, fetched_at)} for everything in the price cache."""
     with connect() as conn:

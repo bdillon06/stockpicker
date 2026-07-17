@@ -206,6 +206,19 @@ def volume_surge(volume, period: int = 20) -> float:
     return float(v[-1] / avg)
 
 
+def dollar_volume(close, volume, period: int = 20) -> float:
+    """Average daily traded dollars over ``period`` bars (price x shares).
+
+    The liquidity floor for whether a setup is actually tradable — share volume
+    alone is misleading across very different price levels.
+    """
+    c, v = _as_array(close), _as_array(volume)
+    n = min(len(c), len(v))
+    if n < period:
+        return NAN
+    return float(np.mean(c[-period:] * v[-period:]))
+
+
 def breakout_strength(high, close, lookback: int = 20) -> float:
     """How far the latest close sits relative to the prior N-day high.
 
@@ -259,10 +272,16 @@ def compute_all(ohlcv: dict, bench_close=None) -> dict:
 
     macd_d = macd(close)
     boll = bollinger(close)
+    e13 = ema(close, 13)
+    atr_v = atr(high, low, close, 14)
+    # How far price has run above the 13-EMA, in ATRs — the "am I chasing?"
+    # measure. NaN (rather than a divide-by-zero) when ATR is unavailable.
+    ext = (last - e13) / atr_v if not (
+        np.isnan(e13) or np.isnan(atr_v) or atr_v <= 0) else NAN
     return {
         "price": last,
         # --- Core moving-average framework: 13 / 90 / 200 EMA stack ---
-        "ema13": ema(close, 13),
+        "ema13": e13,
         "ema90": ema(close, 90),
         "ema200": ema(close, 200),
         "ema13_slope": ema_slope(close, 13, 10),
@@ -277,9 +296,11 @@ def compute_all(ohlcv: dict, bench_close=None) -> dict:
         "bb_lower": boll["lower"],
         "bb_pct_b": boll["pct_b"],
         "bb_squeeze": boll["squeeze"],
-        "atr": atr(high, low, close, 14),
+        "atr": atr_v,
         "obv_trend": obv_trend(close, volume, 20),
         "volume_surge": volume_surge(volume, 20),
+        "dollar_volume": dollar_volume(close, volume, 20),
+        "ext_atr_from_ema13": ext,
         "breakout": breakout_strength(high, close, 20),
         "rel_strength": relative_strength(close, bench_close, 63)
         if bench_close is not None else NAN,

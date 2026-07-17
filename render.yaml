@@ -16,10 +16,21 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.6"
 
-    # NOTE: the free tier has an EPHEMERAL filesystem — the price cache and the
-    # watchlist reset on every deploy/restart (the app auto re-seeds from
-    # seed_snapshot.csv, so it's never empty). To persist them, switch to a paid
-    # instance and uncomment the disk + STOCKPICKER_DB env var below:
+    # NOTE: the free tier has an EPHEMERAL filesystem and spins down after ~15
+    # minutes idle, so the whole SQLite file is lost on every wake, deploy or
+    # restart. All four tables live in it, and they do NOT degrade equally:
+    #
+    #   price_cache  / enrich_cache -> self-healing; the next scan refetches
+    #                                  (~40-60s) and re-seeds from the snapshot.
+    #   watchlist                   -> LOST. Starred tickers silently disappear.
+    #   rank_history                -> LOST, so the "Δ 1d" column can never show
+    #                                  movement: with no prior day it reports NEW
+    #                                  forever. The feature is dead on free tier.
+    #
+    # Those last two cannot be recovered by refetching — they are user state.
+    # A scan peaks around 200MB RSS (measured, 503 tickers), so the 512MB free
+    # tier fits; persistence, not memory, is what the free plan actually costs.
+    # To keep the watchlist and Δ 1d, move to a paid instance and uncomment:
     #
     # disk:
     #   name: data

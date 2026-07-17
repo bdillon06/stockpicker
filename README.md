@@ -30,9 +30,16 @@ python app.py
 ```
 
 First run seeds a price cache from the bundled `seed_snapshot.csv` so you get a
-ranking immediately. Click **↻ Refresh data** to pull fresh prices for the full
-universe from Yahoo Finance. Everything runs locally on your own machine — no
-account, no data leaves your computer except the price requests to Yahoo.
+ranking immediately. **Every scan refreshes prices automatically** when the cache
+is older than `data.PRICE_TTL` (6h), so a scan always reflects the latest close
+without you having to remember to refresh. The first scan of the day therefore
+takes ~40-60s while it pulls the universe; later scans that day are instant.
+**↻ Refresh data** is still there to force a pull. Everything runs locally on your
+own machine — no account, no data leaves your computer except requests to Yahoo.
+
+The scan header always shows **prices as of `<date>`**, and warns when that date
+is more than a few days old — a throttled refresh otherwise looks exactly like a
+fresh scan, leaving you ranking a stale snapshot.
 
 ## Deploy to Render (optional — local use still works)
 
@@ -52,13 +59,27 @@ The repo includes `render.yaml`, so hosting is a few clicks. Running locally wit
 
 **Free-tier notes:**
 - The instance **sleeps after ~15 min idle**; the first request after sleeping
-  takes ~30–60s to wake.
-- The filesystem is **ephemeral** — the price cache and watchlist reset on each
-  deploy/restart. The app auto re-seeds from `seed_snapshot.csv`, so it's never
-  empty; hit **↻ Refresh data** for live prices. To persist them, use a paid
-  instance with a disk (see the commented block in `render.yaml`).
-- Yahoo throttles datacenter IPs harder than home connections, so a full Refresh
-  on Render may be slower / partially rate-limited; the snapshot keeps it usable.
+  takes ~30–60s to wake, and the first scan after that spends another ~40–60s
+  refreshing the universe before it returns.
+- The filesystem is **ephemeral**, and the whole SQLite file dies with it on every
+  sleep/deploy/restart. The four tables do **not** degrade equally:
+  - `price_cache` / `enrich_cache` — self-healing. The next scan refetches, and
+    the app re-seeds from `seed_snapshot.csv` meanwhile, so a scan is never empty.
+  - **`watchlist` — lost.** Starred tickers silently disappear.
+  - **`rank_history` — lost**, so the **Δ 1d column can never work**: with no prior
+    day it reports `NEW` forever.
+
+  The first two recover by themselves; the last two are user state and cannot.
+  **If you want the watchlist and Δ 1d to survive, you need the paid instance with
+  a disk** (uncomment the block in `render.yaml`) — that, not CPU or memory, is
+  what the free plan actually costs you. A scan peaks near 200MB RSS against the
+  512MB free limit, so memory is not the constraint.
+- Yahoo throttles datacenter IPs harder than home connections, so a refresh on
+  Render may be slower or partially rate-limited. When that happens the scan
+  header shows **prices as of `<date>`** with a warning instead of quietly serving
+  a stale ranking, and any ticker whose catalysts failed is named. Keep
+  `seed_snapshot.csv` current (`python generate_seed.py`) — on free tier it is the
+  cold-start state of the app, so a stale snapshot means a stale first scan.
 
 ## How it works — two-stage pipeline
 
@@ -74,13 +95,34 @@ The repo includes `render.yaml`, so hosting is a few clicks. Running locally wit
    - Breakout: 20-day high break, Bollinger squeeze
    - Volume: surge vs 20-day average, OBV trend
    - Relative strength vs SPY
-2. **Stage 2 — catalyst enrichment (expensive), top ~40 only.** Per-ticker
+2. **Stage 2 — the EMA gate (absolute, not relative).** Ranking alone is
+   percentile-based, so it *always* yields a "top 30" no matter how bad the tape
+   — the best name in a falling market still scores ~100. `scoring.DEFAULT_FILTERS`
+   therefore gates on the setup itself before anything is shown: price above the
+   200-EMA, EMA13 above EMA90, not overextended above the 13-EMA (in ATRs), plus
+   a price and dollar-volume liquidity floor. Names that fail never reach the
+   results, and the scan reports `scanned → qualified → shown`. **If nothing
+   qualifies, the scan says so rather than padding the list** — some days the
+   market isn't offering a setup.
+3. **Stage 3 — catalyst enrichment (expensive), top ~40 only.** Per-ticker
    earnings date, analyst upgrades/downgrades, recent news, options put/call
    ratio and short interest adjust the score (e.g. imminent earnings = penalty,
-   upgrades / squeeze setup = boost).
+   upgrades / squeeze setup = boost). Because a catalyst can move a score ~14
+   points, enrichment **repeats until the displayed cut is stable** — otherwise a
+   penalised name sinks and pulls an un-enriched one into view, leaving that row
+   on a bare technical score while its neighbours carry adjusted ones. If Yahoo
+   throttles a per-ticker call, the affected tickers are listed in the scan's
+   `unenriched` field and named in the UI rather than silently skewing a row.
+
+Every stock in a scan is priced on the **same session** (`as_of`); a name that
+hasn't printed the latest bar is dropped rather than ranked against fresher
+peers, since one stale price corrupts every percentile it takes part in.
 
 Each pick comes with a **BUY / WATCH / AVOID** badge, the reasons that fired, and
-**ATR-based suggested entry / stop / target**.
+**ATR-based suggested entry / stop / target**. The badge is driven by the
+absolute chart (EMA stack, MACD, RSI, volume) and only *confirmed* by the score —
+scoring on percentile alone used to promote the least-bad stock in a weak market
+to BUY.
 
 ## Rate limiting
 
@@ -113,5 +155,21 @@ and degrades to the seed snapshot rather than failing.
 
 - **Universe:** edit `universe.csv` (`symbol,name,sector`).
 - **Weights:** adjust the sliders in the UI per scan, or change
-  `scoring.DEFAULT_WEIGHTS`.
+  `scoring.DEFAULT_WEIGHTS`. The UI's `DEFAULT_W` in `static/app.js` mirrors
+  these — **keep the two in sync**, or the scan and the detail drawer will score
+  the same stock differently.
+- **EMA filters:** `scoring.DEFAULT_FILTERS`, or per scan via the API:
+  ```bash
+  curl -X POST localhost:5057/api/scan -H 'Content-Type: application/json' -d '{
+    "filters": {"require_full_stack": true, "require_slow_rising": true,
+                "max_ext_from_fast": 2.5, "min_dollar_volume": 20000000},
+    "hide_avoid": true}'
+  ```
+  `require_full_stack` demands the textbook price > EMA13 > EMA90 > EMA200;
+  `require_slow_rising` additionally demands a rising 200-EMA; `max_ext_from_fast`
+  caps how far above the 13-EMA (in ATRs) a name may be before it counts as a
+  chase. Tighten these to get fewer, higher-conviction names.
+- **Freshness:** `data.PRICE_TTL` (default 6h) controls how old the cache may be
+  before a scan refetches. Lower it to refresh more eagerly, at the cost of more
+  Yahoo requests.
 - **Stop/target multiples:** `signals.levels(stop_mult, target_mult)`.

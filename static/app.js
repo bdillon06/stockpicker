@@ -2,7 +2,10 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const FACTORS = ["trend", "momentum", "breakout", "volume", "rel_strength"];
-const DEFAULT_W = {trend:20, momentum:30, breakout:20, volume:15, rel_strength:15};
+// Must mirror scoring.DEFAULT_WEIGHTS. When these drifted from the backend, the
+// scan (which sends these) and the drawer (which used the backend defaults)
+// scored the same stock differently and disagreed on its badge.
+const DEFAULT_W = {trend:45, momentum:20, breakout:15, volume:10, rel_strength:10};
 let watchSet = new Set();
 let lastResults = [];
 
@@ -67,12 +70,33 @@ async function runScan() {
     const moved = res.prev_date
       ? ` · Δ 1d vs ${res.prev_date}`
       : " · Δ 1d baseline set (scan again tomorrow to see movement)";
-    $("#scanMsg").textContent =
-      `Scanned ${res.scanned} stocks · enriched top ${res.enriched} with catalysts${moved}.`;
+    // Always show the session the ranking is built on. A silently throttled
+    // refresh otherwise looks identical to a fresh scan. Tolerate a few days'
+    // gap so weekends and market holidays don't raise a false alarm.
+    const asOf = res.as_of ? staleNotice(res.as_of) : "";
+    // A throttled catalyst fetch leaves a row on its technical score only; say
+    // so rather than let it quietly disagree with its own detail view.
+    const missed = (res.unenriched || []).length
+      ? ` · <b class="stale">no catalysts for ${res.unenriched.join(", ")}</b>` +
+        " (Yahoo throttled — technical score only)"
+      : "";
+    $("#scanMsg").innerHTML =
+      `${asOf} · ${res.scanned} scanned → <b>${res.qualified}</b> passed the EMA ` +
+      `filters → showing <b>${res.shown}</b> · enriched top ${res.enriched}` +
+      `${missed}${moved}.`;
     renderScan(lastResults.slice(0, Number($("#topN").value)));
   } catch (e) {
     $("#scanMsg").textContent = "Scan failed: " + e;
   } finally { btn.disabled = false; }
+}
+
+/* Flag prices that are genuinely behind, without false-alarming on weekends
+   and holidays: >4 calendar days stale cannot be explained by a normal close. */
+function staleNotice(asOf) {
+  const days = Math.floor((Date.now() - new Date(asOf + "T00:00:00")) / 86400000);
+  const stale = days > 4;
+  return `<b class="${stale ? "stale" : "fresh"}">prices as of ${asOf}</b>` +
+    (stale ? ` ⚠️ ${days} days old — the refresh isn't getting through` : "");
 }
 
 function bar(v) { return `<div class="bar"><i style="width:${Math.round(v)}%"></i></div>`; }
@@ -120,7 +144,12 @@ function renderScan(rows) {
 async function openDetail(ticker) {
   $("#drawer").classList.remove("hidden");
   $("#drawerBody").innerHTML = `<h2>${ticker}</h2><p class="msg">Loading…</p>`;
-  const d = await api("/api/stock/" + ticker);
+  // Score the drawer with the same weights the scan used, so the detail can
+  // never contradict the row that was clicked.
+  const qs = new URLSearchParams();
+  const w = currentWeights();
+  FACTORS.forEach(f => qs.set("w_" + f, w[f]));
+  const d = await api("/api/stock/" + ticker + "?" + qs.toString());
   if (d.error) { $("#drawerBody").innerHTML = `<h2>${ticker}</h2><p>${d.error}</p>`; return; }
   const ind = d.indicators, lv = d.signal.levels, en = d.enrich || {};
   const cats = (d.catalyst_notes || []).map(n => `<span class="chip">${n}</span>`).join("") || "—";
@@ -157,6 +186,9 @@ async function openDetail(ticker) {
       <div><span>Rel. strength</span>${pct(ind.rel_strength)}</div>
       <div><span>ATR</span>$${fmt(ind.atr)}</div>
     </div>
+    ${(d.filter_fails || []).length
+      ? `<p class="msg"><b class="stale">Fails the EMA filters:</b> ${
+          d.filter_fails.join(" · ")}</p>` : ""}
     <h3>Catalysts</h3><div>${cats}</div>
     ${heads ? `<ul class="reasons">${heads}</ul>` : ""}
     <h3>Why</h3>
