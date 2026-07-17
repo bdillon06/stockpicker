@@ -143,7 +143,50 @@ and degrades to the seed snapshot rather than failing.
 | `app.py` | Flask API + serves the frontend |
 | `static/` | Vanilla-JS single-page UI |
 | `generate_seed.py` | Refreshes `seed_snapshot.csv` (run occasionally) |
+| `backtest.py` | Walk-forward backtest of the scan (no network; reads the cache) |
 | `tests/` | Network-free unit tests for the analytical core |
+
+## Backtest — does the score actually pick winners?
+
+The app can only tell you a chart *matches the pattern*. Whether the pattern pays
+is a separate question, and `backtest.py` is the only thing here that addresses
+it. It replays the scanner over the cached history, taking the picks it would
+genuinely have made on each date:
+
+```bash
+python backtest.py                      # top 5 BUY signals, 10-bar hold
+python backtest.py --top 10 --hold 5 --slippage-bps 10
+```
+
+It calls the **live** `compute_all` / `rank_universe` / `passes_filters` /
+`signals.evaluate` rather than re-implementing the strategy, so it measures what
+the app actually does. Indicators are computed strictly from bars up to the
+decision date, entries are at the *next* open, and a bar that spans both stop and
+target resolves to the **stop** (daily bars hide intraday order, and the
+optimistic branch invents profit). `tests/test_backtest.py` guards all three.
+
+It reports two controls alongside the strategy, and they matter more than the
+headline number:
+
+- **every gated name** — the average of all names that passed the EMA filter. If
+  the picks don't beat this, the *score* adds nothing and the gate is doing the
+  work.
+- **SPY buy & hold** — if the picks don't beat this, the strategy was just the
+  market with extra steps.
+
+**A positive result is not evidence this makes money.** The biases below inflate
+returns and cannot be removed with the cached data — the run prints them every
+time on purpose:
+
+- **Survivorship (largest).** `universe.csv` is *today's* S&P 500; names that
+  dropped out during the window are missing, and today's members are there
+  because they did well enough to stay.
+- **~1.2 years, one regime.** 2 years of bars minus the 200-EMA warm-up, in a
+  bull market — exactly where a long-only, above-200-EMA strategy flatters itself.
+- **No catalysts.** Earnings/news exist only as a current snapshot, never
+  point-in-time, so `apply_catalysts` is out of scope; this is the technical
+  score alone.
+- **Idealised fills.** Real gaps are worse than `--slippage-bps` models.
 
 ## Tests
 
